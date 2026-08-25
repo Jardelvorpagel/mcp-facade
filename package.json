@@ -1,0 +1,13 @@
+{
+  "name": "mcp-facade",
+  "version": "1.0.0",
+  "description": "Generic MCP facade: expose a compacted subset of an upstream MCP server's tools, keep the rest discoverable via meta-tools",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run facade.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  }
+}

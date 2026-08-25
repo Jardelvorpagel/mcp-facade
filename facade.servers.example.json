@@ -1,0 +1,27 @@
+{
+  "acme-http": {
+    "upstream": {
+      "url": "https://mcp.example.com/v1/mcp",
+      "credentialId": "mcp_oauth:profile:default:https://mcp.example.com/v1/mcp"
+    },
+    "used": [
+      "get_thing",
+      "search_things",
+      "create_thing"
+    ]
+  },
+  "local-stdio": {
+    "upstream": {
+      "command": "/usr/local/bin/npx",
+      "args": [
+        "-y",
+        "@example/mcp-server-things"
+      ],
+      "envFrom": "claude:local-stdio"
+    },
+    "used": [
+      "list_items",
+      "read_item"
+    ]
+  }
+}
