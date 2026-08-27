@@ -4,9 +4,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { execSync } from "child_process";
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
 import { dirname } from "path";
+import { fetchToken, refreshOAuth, type UpstreamHttp } from "./refresh.js";
 
 // Generic MCP facade: exposes a configured subset of an upstream server's tools
 // with compacted schemas, plus discover/describe/call meta-tools for the rest.
@@ -16,10 +16,6 @@ import { dirname } from "path";
 // upstreams read env from an existing host config ("envFrom": "claude:<name>").
 // NOTE: stdio transport owns stdout — all diagnostics go to stderr.
 
-interface UpstreamHttp {
-	url: string;
-	credentialId?: string;
-}
 interface UpstreamStdio {
 	command: string;
 	args?: string[];
@@ -51,7 +47,6 @@ if (!config) {
 const CATALOG_DIR = `${process.env.HOME}/.omp/agent/mcp-facade/catalogs`;
 const CATALOG_PATH = `${CATALOG_DIR}/${serverName}.json`;
 const CATALOG_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
-const OMP = `${process.env.HOME}/.bun/bin/omp`;
 
 interface RemoteTool {
 	name: string;
@@ -72,14 +67,13 @@ function envFromClaude(key: string): Record<string, string> {
 	}
 }
 
-async function connectUpstream(refreshToken = false): Promise<Client> {
+async function connectUpstream(): Promise<Client> {
 	const up = config.upstream;
 	const c = new Client({ name: `${serverName}-facade`, version: "1.0.0" });
 	if ("url" in up) {
 		const headers: Record<string, string> = {};
 		if (up.credentialId) {
-			const flag = refreshToken ? " --force-refresh" : "";
-			const token = execSync(`${OMP} token${flag} "${up.credentialId}"`, { encoding: "utf-8" }).trim();
+			const token = await fetchToken(up);
 			headers.Authorization = `Bearer ${token}`;
 		}
 		await c.connect(new StreamableHTTPClientTransport(new URL(up.url), { requestInit: { headers } }));
@@ -93,7 +87,7 @@ async function connectUpstream(refreshToken = false): Promise<Client> {
 
 async function getClient(refresh = false): Promise<Client> {
 	if (client && !refresh) return client;
-	return connectUpstream(refresh);
+	return connectUpstream();
 }
 
 async function getCatalog(): Promise<RemoteTool[]> {
@@ -135,12 +129,50 @@ function compactSchema(node: unknown): unknown {
 	}
 	return node;
 }
+/**
+ * Structural prune: recurse only through required fields; optional subtrees
+ * collapse to `{ type, description }`. Full shape stays reachable via describe.
+ */
+function pruneSchema(node: unknown): unknown {
+	if (Array.isArray(node)) return node.map(pruneSchema);
+	if (!node || typeof node !== "object") return node;
+	const obj = node as Record<string, unknown>;
+	const required = new Set((obj.required as string[] | undefined) ?? []);
+	const out: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(obj)) {
+		if (k === "$comment" || k === "examples" || k === "default" || k === "additionalProperties") continue;
+		if (k === "description" && typeof v === "string") {
+			out[k] = firstSentence(v, 100);
+			continue;
+		}
+		if (k === "properties" && v && typeof v === "object") {
+			const props: Record<string, unknown> = {};
+			for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) {
+				const p = pv as Record<string, unknown> | undefined;
+				if (required.has(pk)) props[pk] = pruneSchema(pv);
+				else
+					props[pk] = {
+						type: (p?.type as string) ?? "unknown",
+						description: firstSentence((p?.description as string) ?? "optional", 60),
+					};
+			}
+			out.properties = props;
+			continue;
+		}
+		if ((k === "anyOf" || k === "oneOf" || k === "allOf") && Array.isArray(v)) {
+			out[k] = v.map(pruneSchema);
+			continue;
+		}
+		out[k] = pruneSchema(v);
+	}
+	return out;
+}
 
 function compactTool(tool: RemoteTool): RemoteTool {
 	return {
 		name: tool.name.toLowerCase(),
 		description: firstSentence(tool.description ?? ""),
-		inputSchema: compactSchema(tool.inputSchema ?? { type: "object" }),
+		inputSchema: pruneSchema(compactSchema(tool.inputSchema ?? { type: "object" })),
 	};
 }
 
@@ -193,6 +225,11 @@ async function proxyCall(remoteName: string, args: unknown, allowRetry = true): 
 		if (allowRetry && "url" in config.upstream && config.upstream.credentialId && /401|unauthorized|invalid.*token|expired/i.test(String(err))) {
 			console.error(`[facade:${serverName}] auth refresh + retry`);
 			client = null;
+			const up = config.upstream as UpstreamHttp;
+			if (up.oauth) {
+				// 401 means the cached access token is dead — refresh directly, don't call omp token
+				await refreshOAuth(up);
+			}
 			const c = await getClient(true);
 			return await c.callTool({ name: remoteName, arguments: args as Record<string, unknown> });
 		}

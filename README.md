@@ -25,11 +25,14 @@ total.
 - On the first `tools/list`, fetches the upstream catalog and caches it to disk
   (`~/.omp/agent/mcp-facade/catalogs/<name>.json`, 7-day TTL). The upstream
   connection is lazy — nothing connects until first use.
-- Serves each `used` tool with a compacted schema:
+- Serves each `used` tool with a pruned schema:
   - every `description` string (tool-level and inside the JSON schema) is cut to
-    its first sentence, max 140 chars;
-  - `$comment`, `examples`, and `default` keys are dropped recursively;
-  - structure (types, properties, required, enums) is left intact;
+    its first sentence (tool-level max 140 chars, field-level max 100);
+  - `$comment`, `examples`, `default`, and `additionalProperties` keys are dropped recursively;
+  - recursion follows `required` fields; optional subtrees collapse to
+    `{ "type": …, "description": "≤60 chars" }`, so a fat optional branch costs
+    one line instead of dozens;
+  - the full original shape stays one `describe` hop away;
   - tool names are lowercased; lookup is case-insensitive.
 - Always appends the three meta-tools (see below).
 - If the catalog can't be fetched at `tools/list` time, it degrades to serving
@@ -77,7 +80,14 @@ cp facade.servers.example.json facade.servers.json   # then edit
       // HTTP upstream (Streamable HTTP transport):
       "url": "https://mcp.example.com/v1/mcp",
       "credentialId": "mcp_oauth:profile:default:https://mcp.example.com/v1/mcp" // optional
-
+      // optional: direct OAuth refresh on 401 (see refresh.ts). Never put the
+      // secret itself in config — reference it:
+      "oauth": {
+      //   "tokenUrl": "https://example.com/v1/token",
+      //   "clientId": "<client-id>",
+      //   "clientSecretFrom": "keychain:<service>" | "env:<VAR>", // omit for public clients
+      //   "authStyle": "body" | "basic" // body = default; basic required by Figma
+      }
       // …or stdio upstream:
       // "command": "/usr/local/bin/npx",
       // "args": ["-y", "@example/mcp-server"],
