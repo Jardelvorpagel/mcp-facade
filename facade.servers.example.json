@@ -2,7 +2,13 @@
   "acme-http": {
     "upstream": {
       "url": "https://mcp.example.com/v1/mcp",
-      "credentialId": "mcp_oauth:profile:default:https://mcp.example.com/v1/mcp"
+      "credentialId": "mcp_oauth:profile:default:https://mcp.example.com/v1/mcp",
+      "oauth": {
+        "tokenUrl": "https://example.com/v1/token",
+        "clientId": "your-public-client-id",
+        "clientSecretFrom": "keychain:mcp-example-oauth-client-secret",
+        "authStyle": "basic"
+      }
     },
     "used": [
       "get_thing",
